@@ -37,6 +37,19 @@ EXTENSIONS = {
 
 SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/drive.activity.readonly']
 
+events_colors = {
+    "create": "#DB8521",
+    "update": "#DB8521",
+    "download": "#DB8521",
+    "done": "#23DB45",
+    "move": "#23DBAE",
+    "rename": "#23DBAE",
+    "restore": "#23DBAE",
+    "delete": "#DB5023",
+    "skip": "#fff",
+    "start": "#fff",
+}
+
 
 class GoogleDriveClient:
     def __init__(self):
@@ -113,8 +126,9 @@ class GoogleDriveClient:
         try:
             file_name = file_path.split("\\")[-1]
             if file_mime_type in SKIP:
-                self.events_manager.update("skip", f"Skipped {file_name},"
-                                                   f" because of its type {file_mime_type.split('.')[-1]}.")
+                self.events_manager.update("skip", f"<br><html><p style='color:{events_colors['skip']}'>"
+                                                   f"<b>Skipped</b> {file_name},"
+                                                   f" because of its type {file_mime_type.split('.')[-1]}.</p></html>")
                 return None
             elif file_mime_type in MIMETYPES:
                 request = self.drive_service.files().export_media(fileId=file_id,
@@ -125,9 +139,17 @@ class GoogleDriveClient:
             file = io.BytesIO()
             downloader = MediaIoBaseDownload(file, request)
             done = False
+            self.events_manager.update("download", f"<html><br><p style='color:{events_colors['download']}'>"
+                                                   f"Start Downloading <b>{file_name}</b>.</p>")
             while not done:
                 status, done = downloader.next_chunk()
-                self.events_manager.update("download", f"Download {int(status.progress() * 100)}%.")
+                if done:
+                    progress = 100
+                else:
+                    progress = int(status.progress() * 100)
+                self.events_manager.update("download", f"<html><p style='color:{events_colors['download']}'>"
+                                                       f"<b>Downloading</b> {progress}%.</p>"
+                                                       f"</html>")
             file.seek(0)
 
             with open(file_path, 'wb') as f:
@@ -135,7 +157,9 @@ class GoogleDriveClient:
 
             # take last 3 directories in path
             shortened_file_path = "\\".join(file_path.split("\\")[-4:-1])
-            self.events_manager.update("done", f"Done downloading {file_name} to {shortened_file_path}.")
+            self.events_manager.update("done", f"<html><p style='color:{events_colors['done']}'>"
+                                               f"<b>Done</b> downloading"
+                                               f" {file_name} to {shortened_file_path}.</p></html>")
 
         except HttpError as error:
             print('An error occurred: {}'.format(error))
@@ -172,10 +196,14 @@ class GoogleDriveClient:
         :param new_file_id: file ID.
         :return: file metadata.
         """
-        file_metadata = self.drive_service.files().get(
-            fileId=new_file_id,
-            fields="id, name, mimeType, parents, shortcutDetails"
-        ).execute()
+        try:
+            file_metadata = self.drive_service.files().get(
+                fileId=new_file_id,
+                fields="id, name, mimeType, parents, shortcutDetails"
+            ).execute()
+        except HttpError as error:
+            print('An error occurred: {}'.format(error))
+            return None
 
         if not file_metadata['parents']:
             return file_metadata
@@ -238,7 +266,8 @@ class GoogleDriveClient:
             body={
                 'ancestorName': f'items/{self.drive_id}',
                 'pageSize': page_size,
-                'filter': f'time >= "{timestamp}" detail.action_detail_case:(CREATE MOVE RENAME DELETE)'
+                'filter': f'time >= "{timestamp}"'
+                          f' detail.action_detail_case:(CREATE MOVE RENAME DELETE EDIT RESTORE)'
             }
         ).execute()
 
@@ -279,6 +308,9 @@ class GoogleDriveClient:
         :param call_timestamp: timestamp of the call.
         :return: None.
         """
+        self.events_manager.update("start", f"<html><h2 style='color:{events_colors['start']}'>"
+                                            f"Syncing...</h2></html>")
+
         self.home = self.drive_service.files().get(
             fileId=self.drive_id,
             fields="name"
@@ -288,23 +320,33 @@ class GoogleDriveClient:
         changed_files = self.pull_changes_with_limit(self.last_timestamp, 100)
 
         if self.is_activities_data_empty(changed_files):
-            self.events_manager.update("done", "No changes to sync.")
+            self.events_manager.update("skip", f"<html><br><h3 style='color:{events_colors['skip']}'>"
+                                               f"No changes to sync.</h3></html>")
 
             self.last_timestamp = current_timestamp
             print(f"{self.last_timestamp}\ttime stamp updated with no changed files")
             return
 
+        timestamp_format = "%Y-%m-%dT%H:%M:%S.%fZ"
         for activity in reversed(changed_files['activities']):
             for target in activity['targets']:
                 file_id = target['driveItem']['name'].split('/')[1]
                 timestamp = activity['timestamp']
 
-                if datetime.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").date() < datetime.datetime.strptime(
-                        self.last_timestamp, "%Y-%m-%dT%H:%M:%S.%fZ").date():
+                # check if timestamp has fraction of seconds
+                if '.' in timestamp:
+                    timestamp_datetime = datetime.datetime.strptime(timestamp, timestamp_format)
+                else:
+                    timestamp_datetime = datetime.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+                last_timestamp_datetime = datetime.datetime.strptime(self.last_timestamp, timestamp_format)
+
+                if timestamp_datetime.date() < last_timestamp_datetime.date():
                     print(f"this file id: {file_id} should have been notified before")
                     continue
 
                 file_metadata = self.build_file_metadata(file_id)
+                if file_metadata is None:
+                    continue
 
                 action = list(activity['primaryActionDetail'].keys())[0]
                 path = os.path.join(*file_metadata['directory'])
@@ -313,8 +355,12 @@ class GoogleDriveClient:
 
                 if action == 'create':
                     self.create_event(file_id, file_metadata, path)
+                elif action == 'edit':
+                    self.edit_event(file_id, file_metadata, path)
                 elif action == 'delete':
                     self.delete_event(file_metadata, path)
+                elif action == 'restore':
+                    self.restore_event(file_metadata, path)
                 elif action == 'rename':
                     self.rename_event(activity, file_metadata, path)
                 elif action == 'move':
@@ -322,6 +368,8 @@ class GoogleDriveClient:
 
         self.last_timestamp = current_timestamp
         print(f"{self.last_timestamp}\tupdated at the end of the call")
+        self.events_manager.update("done", f"<html><br><h3 style='color:{events_colors['done']}'>"
+                                           f"Syncing done.</h3></html>")
 
     def rename_event(self, activity, file_metadata, path):
         """
@@ -338,8 +386,9 @@ class GoogleDriveClient:
 
             shortened_file_path = "\\".join(os.path.join(path, file_metadata['newTitle']).split("\\")[-4:-1])
             self.events_manager.update("rename",
-                                       f"Renamed {file_metadata['oldTitle']} to {file_metadata['newTitle']} in"
-                                       f" {shortened_file_path}")
+                                       f"<html><br><p style='color:{events_colors['rename']}'>"
+                                       f"<b>Renamed {file_metadata['oldTitle']}</b> to"
+                                       f" <b>{file_metadata['newTitle']}</b> in {shortened_file_path}.</p></html>")
 
     def move_event(self, activity, file_metadata):
         """
@@ -361,12 +410,14 @@ class GoogleDriveClient:
         added_parent_id = added_parent['name'].split('/')[1]
         new_path = os.path.join(*self.build_file_path(added_parent_id), added_parent['title'])
 
-        shutil.move(str(old_path), str(new_path))
-
-        shortened_old_path = "\\".join(old_path.split("\\")[-4:-1])
-        shortened_new_path = "\\".join(new_path.split("\\")[-4:-1])
-        self.events_manager.update("move",
-                                   f"Moved {file_metadata['name']} from {shortened_old_path} to {shortened_new_path}")
+        if not os.path.exists(os.path.join(str(new_path), file_metadata['name'])):
+            shutil.move(str(old_path), str(new_path))
+            shortened_old_path = "\\".join(old_path.split("\\")[-4:-1])
+            shortened_new_path = "\\".join(new_path.split("\\")[-4:-1])
+            self.events_manager.update("move",
+                                       f"<html><br><p style='color:{events_colors['move']}'>"
+                                       f"<b>Moved {file_metadata['name']}</b> from"
+                                       f" {shortened_old_path} to {shortened_new_path}.</p></html>")
 
     def delete_event(self, file_metadata, path):
         """
@@ -380,10 +431,14 @@ class GoogleDriveClient:
             if file_metadata['mimeType'] == FOLDER_TYPE:
                 shutil.rmtree(os.path.join(path, file_metadata['name']))
                 self.events_manager.update("delete",
-                                           f"Deleted {file_metadata['name']} folder in {shortened_file_path}")
+                                           f"<html><br><p style='color:{events_colors['delete']}'>"
+                                           f"<b>Deleted</b> {file_metadata['name']}"
+                                           f" folder in {shortened_file_path}.</p></html>")
             else:
                 os.remove(os.path.join(path, file_metadata['name']))
-                self.events_manager.update("delete", f"Deleted {file_metadata['name']} in {shortened_file_path}")
+                self.events_manager.update("delete", f"<html><br><p style='color:{events_colors['delete']}'>"
+                                                     f"<b>Deleted {file_metadata['name']}</b>"
+                                                     f" in {shortened_file_path}.</p></html>")
 
     def create_event(self, file_id, file_metadata, path):
         """
@@ -398,4 +453,42 @@ class GoogleDriveClient:
         elif file_metadata['mimeType'] == FOLDER_TYPE and not os.path.exists(os.path.join(path, file_metadata['name'])):
             os.mkdir(os.path.join(path, file_metadata['name']))
             shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
-            self.events_manager.update("create", f"Created {file_metadata['name']} folder in {shortened_file_path}")
+            self.events_manager.update("create", f"<html><br><p style='color:{events_colors['create']}'>"
+                                                 f"<b>Created {file_metadata['name']}</b>"
+                                                 f" folder in {shortened_file_path}.</p></html>")
+
+    def edit_event(self, file_id, file_metadata, path):
+        """
+        A file was edited and need to be downloaded again.
+        :param file_id: file ID.
+        :param file_metadata: file metadata.
+        :param path: path to the file.
+        :return: None.
+        """
+        if file_metadata['mimeType'] != FOLDER_TYPE:
+            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+            self.export_and_download_file(file_id, file_metadata['mimeType'], os.path.join(path, file_metadata['name']))
+            self.events_manager.update("update", f"<html><br><p style='color:{events_colors['update']}'>"
+                                                 f"<b>Updated {file_metadata['name']}</b>"
+                                                 f" in {shortened_file_path}.</p></html>")
+
+    def restore_event(self, file_metadata, path):
+        """
+        Restore a file or folder.
+        :param file_metadata: file metadata.
+        :param path: path to the file.
+        :return: None.
+        """
+        if file_metadata['mimeType'] == FOLDER_TYPE:
+            os.mkdir(os.path.join(path, file_metadata['name']))
+            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+            self.events_manager.update("restore", f"<html><br><p style='color:{events_colors['restore']}'>"
+                                                  f"<b>Restored {file_metadata['name']}</b>"
+                                                  f" folder in {shortened_file_path}.</p></html>")
+        else:
+            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'],
+                                          os.path.join(path, file_metadata['name']))
+            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+            self.events_manager.update("restore", f"<html><br><p style='color:{events_colors['restore']}'>"
+                                                  f"<b>Restored {file_metadata['name']}</b>"
+                                                  f" in {shortened_file_path}.</p></html>")

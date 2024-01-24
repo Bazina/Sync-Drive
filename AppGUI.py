@@ -7,16 +7,6 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QTextCursor, QIcon
 from PyQt5.QtWidgets import *
 
-events_colors = {
-    "create": "#F2B90C",
-    "update": "#F2B90C",
-    "download": "#F2B90C",
-    "done": "#1DC90E",
-    "move": "#1DC90E",
-    "delete": "#1DC90E",
-    "rename": "#1DC90E",
-}
-
 
 class Widgets(QWidget):
     def __init__(self, app, drive_client):
@@ -116,8 +106,6 @@ class Widgets(QWidget):
         self.move(qr.topLeft())
 
     def notify(self, event, text):
-        color = QtGui.QColor(events_colors[event])
-        self.text_box.setTextColor(color)
         self.text_box.append(text)
         self.app.processEvents()
 
@@ -136,8 +124,8 @@ class Widgets(QWidget):
                 data["id"] = drive_id
                 data["timestamp"] = current_timestamp
 
-            # with open("cache.json", "w") as cache:
-            #    json.dump(data, cache)
+            with open("cache.json", "w") as cache:
+                json.dump(data, cache)
 
             self.text_box.clear()
             self.text_box.moveCursor(QTextCursor.Start)
