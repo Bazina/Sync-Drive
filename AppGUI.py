@@ -9,12 +9,13 @@ from PyQt5.QtWidgets import *
 
 
 class Widgets(QWidget):
-    def __init__(self, app, drive_client):
+    def __init__(self, app, drive_client, cache_data):
         super(Widgets, self).__init__()
         self.app = app
         self.drive_client = drive_client
-        self.local_directory, self.drive_id, timestamp = self.loading_cache()
-        self.last_timestamp = timestamp
+        self.last_timestamp = cache_data["timestamp"]
+        self.local_directory = cache_data["local_directory"]
+        self.drive_id = cache_data["drive_id"]
         self.init_ui()
 
         self.error_dialog = QMessageBox()
@@ -75,16 +76,6 @@ class Widgets(QWidget):
 
         self.setLayout(self.v_layout)
 
-    @staticmethod
-    def loading_cache():
-        with open("cache.json", "r") as cache:
-            cache = cache.read()
-            data = json.loads(cache)
-            directory = data["directory"]
-            drive_id = data["id"]
-            timestamp = data["timestamp"]
-        return directory, drive_id, timestamp
-
     def get_directory(self):
         response = QFileDialog.getExistingDirectory(
             self,
@@ -117,15 +108,10 @@ class Widgets(QWidget):
             self.error_dialog.show()
         else:
             current_timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
-            with open("cache.json", "r") as cache:
-                cache = cache.read()
-                data = json.loads(cache)
-                data["directory"] = directory
-                data["id"] = drive_id
-                data["timestamp"] = current_timestamp
+            new_cache_data = {"timestamp": current_timestamp, "local_directory": directory, "drive_id": drive_id}
 
             with open("cache.json", "w") as cache:
-                json.dump(data, cache)
+                json.dump(new_cache_data, cache)
 
             self.text_box.clear()
             self.text_box.moveCursor(QTextCursor.Start)
@@ -133,6 +119,3 @@ class Widgets(QWidget):
             self.drive_client.build_drive_client(directory, drive_id, self.last_timestamp)
 
             self.drive_client.get_changes_and_download(current_timestamp)
-
-            self.text_box.setTextColor(QtGui.QColor('#282C34'))
-            self.text_box.append("The End.")

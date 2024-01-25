@@ -1,3 +1,7 @@
+import datetime
+import json
+import os
+
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import *
 
@@ -47,8 +51,20 @@ def run():
     app.setStyleSheet(style)
     app.setWindowIcon(QIcon("google-drive.png"))
 
+    # read cache.json if exists otherwise set timestamp to 7 days ago
+    if os.path.exists("cache.json"):
+        with open("cache.json", "r") as f:
+            data = json.load(f)
+    else:
+        timestamp = datetime.datetime.now() - datetime.timedelta(days=7)
+        timestamp = timestamp.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        data = {"timestamp": timestamp,
+                "local_directory": "", "drive_id": ""}
+        with open("cache.json", "w") as f:
+            json.dump(data, f)
+
     drive_client = GoogleDriveClient()
-    widgets = Widgets(app, drive_client)
+    widgets = Widgets(app, drive_client, data)
     drive_client.events_manager.set_gui_client(widgets)
     widgets.show()
     app.exec_()
