@@ -140,7 +140,7 @@ class GoogleDriveClient:
             file_name = file_path.split("\\")[-1]
             if file_mime_type in SKIP or self.check_skip_regex(file_mime_type):
                 self.events_manager.update("skip", f"<br><html><p style='color:{events_colors['skip']}'>"
-                                                   f"<b>Skipped</b> {file_name},"
+                                                   f"<b>Skipped</b> {file_name}"
                                                    f" because of its type {file_mime_type.split('.')[-1]}.</p></html>")
                 return None
             elif file_mime_type in MIMETYPES:
@@ -274,20 +274,26 @@ class GoogleDriveClient:
 
         return file_parents_names
 
-    def pull_changes_with_limit(self, timestamp, page_size=100):
+    def pull_changes_with_limit(self, timestamp, page_size=100, page_token=None):
         """
         Pull changes from Google Drive with a limit.
         :param timestamp: timestamp of the call.
         :param page_size: number of changes to pull.
+        :param page_token: page token.
         :return: activities data.
         """
+        request_body = {
+            'ancestorName': f'items/{self.drive_id}',
+            'pageSize': page_size,
+            'filter': f'time >= "{timestamp}"'
+                      f' detail.action_detail_case:(CREATE MOVE RENAME DELETE EDIT RESTORE)'
+        }
+
+        if page_token is not None:
+            request_body['pageToken'] = page_token
+
         return self.activity_service.activity().query(
-            body={
-                'ancestorName': f'items/{self.drive_id}',
-                'pageSize': page_size,
-                'filter': f'time >= "{timestamp}"'
-                          f' detail.action_detail_case:(CREATE MOVE RENAME DELETE EDIT RESTORE)'
-            }
+            body=request_body
         ).execute()
 
     @staticmethod
@@ -339,59 +345,83 @@ class GoogleDriveClient:
             self.last_timestamp = self.home['createdTime']
 
         current_timestamp = call_timestamp
-        changed_files = self.pull_changes_with_limit(self.last_timestamp, 100)
 
-        if self.is_activities_data_empty(changed_files):
-            self.events_manager.update("skip", f"<html><br><h3 style='color:{events_colors['skip']}'>"
-                                               f"No changes to sync.</h3></html>")
+        changed_files = self.pull_changes_with_limit(self.last_timestamp, 200)
+        while changed_files.get('nextPageToken') is not None:
+            print(f"next page token: {changed_files['nextPageToken']}")
+            if self.is_activities_data_empty(changed_files):
+                self.events_manager.update("skip", f"<html><br><h3 style='color:{events_colors['skip']}'>"
+                                                   f"No changes to sync.</h3></html>")
 
-            self.last_timestamp = current_timestamp
-            print(f"{self.last_timestamp}\ttime stamp updated with no changed files")
-            return
+                self.last_timestamp = current_timestamp
+                print(f"{self.last_timestamp}\ttime stamp updated with no changed files")
+                return
 
-        timestamp_format = "%Y-%m-%dT%H:%M:%S.%fZ"
-        for activity in reversed(changed_files['activities']):
-            for target in activity['targets']:
-                file_id = target['driveItem']['name'].split('/')[1]
-                timestamp = activity['timestamp']
+            timestamp_format = "%Y-%m-%dT%H:%M:%S.%fZ"
+            for activity in reversed(changed_files['activities']):
+                for target in activity['targets']:
+                    file_id = target['driveItem']['name'].split('/')[1]
+                    timestamp = activity['timestamp']
 
-                # check if timestamp has fraction of seconds
-                if '.' in timestamp:
-                    timestamp_datetime = datetime.datetime.strptime(timestamp, timestamp_format)
-                else:
-                    timestamp_datetime = datetime.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
-                last_timestamp_datetime = datetime.datetime.strptime(self.last_timestamp, timestamp_format)
+                    last_timestamp_datetime, timestamp_datetime = self.build_timestamps(timestamp, timestamp_format)
 
-                if timestamp_datetime.date() < last_timestamp_datetime.date():
-                    print(f"this file id: {file_id} should have been notified before")
-                    continue
+                    if timestamp_datetime.date() < last_timestamp_datetime.date():
+                        print(f"this file id: {file_id} should have been notified before")
+                        continue
 
-                file_metadata = self.build_file_metadata(file_id)
-                if file_metadata is None or file_metadata['trashed']:
-                    continue
+                    file_metadata = self.build_file_metadata(file_id)
+                    if file_metadata is None or file_metadata['trashed']:
+                        continue
 
-                action = list(activity['primaryActionDetail'].keys())[0]
-                path = os.path.join(*file_metadata['directory'])
-                if action != 'delete' and action != 'rename':
-                    path = self.create_missing_folders(file_metadata['directory'])
+                    action = list(activity['primaryActionDetail'].keys())[0]
+                    path = os.path.join(*file_metadata['directory'])
+                    if action != 'delete' and action != 'rename':
+                        path = self.create_missing_folders(file_metadata['directory'])
 
-                if action == 'create':
-                    self.create_event(file_metadata, path)
-                elif action == 'edit':
-                    self.edit_event(file_metadata, path)
-                elif action == 'delete':
-                    self.delete_event(file_metadata, path)
-                elif action == 'restore':
-                    self.restore_event(file_metadata, path)
-                elif action == 'rename':
-                    self.rename_event(activity, file_metadata, path)
-                elif action == 'move':
-                    self.move_event(activity, file_metadata)
+                    self.event_factory(action, activity, file_metadata, path)
+
+            changed_files = self.pull_changes_with_limit(self.last_timestamp, 200, changed_files['nextPageToken'])
 
         self.last_timestamp = current_timestamp
         print(f"{self.last_timestamp}\tupdated at the end of the call")
         self.events_manager.update("done", f"<html><br><h3 style='color:{events_colors['done']}'>"
                                            f"Syncing done.</h3></html>")
+
+    def event_factory(self, action, activity, file_metadata, path):
+        """
+        Factory method to handle the events.
+        :param action: action type.
+        :param activity: Google Drive Activity object.
+        :param file_metadata: file metadata.
+        :param path: path to the file.
+        :return: None.
+        """
+        if action == 'create':
+            self.create_event(file_metadata, path)
+        elif action == 'edit':
+            self.edit_event(file_metadata, path)
+        elif action == 'delete':
+            self.delete_event(file_metadata, path)
+        elif action == 'restore':
+            self.restore_event(file_metadata, path)
+        elif action == 'rename':
+            self.rename_event(activity, file_metadata, path)
+        elif action == 'move':
+            self.move_event(activity, file_metadata)
+
+    def build_timestamps(self, timestamp, timestamp_format):
+        """
+        Build the timestamps.
+        :param timestamp: timestamp of the call.
+        :param timestamp_format: timestamp format.
+        :return: last timestamp and current timestamp.
+        """
+        if '.' in timestamp:
+            timestamp_datetime = datetime.datetime.strptime(timestamp, timestamp_format)
+        else:
+            timestamp_datetime = datetime.datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+        last_timestamp_datetime = datetime.datetime.strptime(self.last_timestamp, timestamp_format)
+        return last_timestamp_datetime, timestamp_datetime
 
     def rename_event(self, activity, file_metadata, path):
         """
