@@ -214,13 +214,13 @@ class GoogleDriveClient:
         try:
             file_metadata = self.drive_service.files().get(
                 fileId=new_file_id,
-                fields="id, name, mimeType, webViewLink, parents, shortcutDetails"
+                fields="id, name, mimeType, webViewLink, parents, shortcutDetails, trashed"
             ).execute()
         except HttpError as error:
             print('An error occurred: {}'.format(error))
             return None
 
-        if not file_metadata['parents']:
+        if not file_metadata['parents'] or file_metadata['trashed']:
             return file_metadata
 
         file_parents_names = self.build_file_path(file_metadata=file_metadata)
@@ -367,7 +367,7 @@ class GoogleDriveClient:
                     continue
 
                 file_metadata = self.build_file_metadata(file_id)
-                if file_metadata is None:
+                if file_metadata is None or file_metadata['trashed']:
                     continue
 
                 action = list(activity['primaryActionDetail'].keys())[0]
