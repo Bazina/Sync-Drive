@@ -79,7 +79,7 @@ Here is a [video](https://youtu.be/ifw3b4Uf06g) that walks through the setup pro
 You can create an executable file using `pyinstaller`:
 
 ```bash
-pyinstaller --onefile --name Sync --windowed --icon=google-drive.png --add-data "warning.png;." --noconsole App.py 
+pyinstaller --onefile --name Sync --windowed --icon=google-drive.png --add-data "warning.png;." --add-data "google-drive.png;."  --noconsole App.py
 ```
 
 1. Run the script:
