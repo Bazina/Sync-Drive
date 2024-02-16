@@ -110,12 +110,12 @@ class Widgets(QWidget):
             current_timestamp = datetime.datetime.utcnow().isoformat() + 'Z'
             new_cache_data = {"timestamp": current_timestamp, "local_directory": directory, "drive_id": drive_id}
 
-            with open("cache.json", "w") as cache:
-                json.dump(new_cache_data, cache)
-
             self.text_box.clear()
             self.text_box.moveCursor(QTextCursor.Start)
 
             self.drive_client.build_drive_client(directory, drive_id, self.last_timestamp)
 
             self.drive_client.get_changes_and_download(current_timestamp)
+
+            with open("cache.json", "w") as cache:
+                json.dump(new_cache_data, cache)

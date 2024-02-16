@@ -156,15 +156,7 @@ class GoogleDriveClient:
             done = False
             self.events_manager.update("download", f"<html><br><p style='color:{events_colors['download']}'>"
                                                    f"Start Downloading <b>{file_name}</b>.</p>")
-            while not done:
-                status, done = downloader.next_chunk()
-                if done:
-                    progress = 100
-                else:
-                    progress = int(status.progress() * 100)
-                self.events_manager.update("download", f"<html><p style='color:{events_colors['download']}'>"
-                                                       f"<b>Downloading</b> {progress}%.</p>"
-                                                       f"</html>")
+            self.download_progress(done, downloader)
             file.seek(0)
 
             with open(file_path, 'wb') as f:
@@ -178,6 +170,17 @@ class GoogleDriveClient:
 
         except HttpError as error:
             print('An error occurred: {}'.format(error))
+
+    def download_progress(self, done, downloader):
+        while not done:
+            status, done = downloader.next_chunk()
+            if done:
+                progress = 100
+            else:
+                progress = int(status.progress() * 100)
+            self.events_manager.update("download", f"<html><p style='color:{events_colors['download']}'>"
+                                                   f"<b>Downloading</b> {progress}%.</p>"
+                                                   f"</html>")
 
     @staticmethod
     def build_real_link_if_shortcut(file_metadata):
@@ -345,20 +348,18 @@ class GoogleDriveClient:
             self.last_timestamp = self.home['createdTime']
 
         current_timestamp = call_timestamp
-
         changed_files = self.pull_changes_with_limit(self.last_timestamp, 200)
-        while changed_files.get('nextPageToken') is not None:
-            print(f"next page token: {changed_files['nextPageToken']}")
+
+        while True:
             if self.is_activities_data_empty(changed_files):
                 self.events_manager.update("skip", f"<html><br><h3 style='color:{events_colors['skip']}'>"
                                                    f"No changes to sync.</h3></html>")
-
                 self.last_timestamp = current_timestamp
-                print(f"{self.last_timestamp}\ttime stamp updated with no changed files")
                 return
 
             timestamp_format = "%Y-%m-%dT%H:%M:%S.%fZ"
             for activity in reversed(changed_files['activities']):
+                print(f"activity: {activity}")
                 for target in activity['targets']:
                     file_id = target['driveItem']['name'].split('/')[1]
                     timestamp = activity['timestamp']
@@ -380,6 +381,8 @@ class GoogleDriveClient:
 
                     self.event_factory(action, activity, file_metadata, path)
 
+            if changed_files.get('nextPageToken') is None:
+                break
             changed_files = self.pull_changes_with_limit(self.last_timestamp, 200, changed_files['nextPageToken'])
 
         self.last_timestamp = current_timestamp
@@ -433,7 +436,9 @@ class GoogleDriveClient:
         """
         file_metadata['oldTitle'] = activity['primaryActionDetail']['rename']['oldTitle']
         file_metadata['newTitle'] = activity['primaryActionDetail']['rename']['newTitle']
-        if os.path.exists(os.path.join(path, file_metadata['oldTitle'])):
+
+        if os.path.exists(os.path.join(path, file_metadata['oldTitle'])) and not os.path.exists(
+                os.path.join(path, file_metadata['newTitle'])):
             os.rename(os.path.join(path, file_metadata['oldTitle']), os.path.join(path, file_metadata['newTitle']))
 
             shortened_file_path = "\\".join(os.path.join(path, file_metadata['newTitle']).split("\\")[-4:-1])
@@ -441,6 +446,9 @@ class GoogleDriveClient:
                                        f"<html><br><p style='color:{events_colors['rename']}'>"
                                        f"<b>Renamed {file_metadata['oldTitle']}</b> to"
                                        f" <b>{file_metadata['newTitle']}</b> in {shortened_file_path}.</p></html>")
+        elif os.path.exists(os.path.join(path, file_metadata['oldTitle'])) and os.path.exists(
+                os.path.join(path, file_metadata['newTitle'])):
+            shutil.rmtree(os.path.join(path, file_metadata['oldTitle']))
 
     def move_event(self, activity, file_metadata):
         """
