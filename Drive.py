@@ -437,10 +437,6 @@ class GoogleDriveClient:
         file_metadata['oldTitle'] = activity['primaryActionDetail']['rename']['oldTitle']
         file_metadata['newTitle'] = activity['primaryActionDetail']['rename']['newTitle']
 
-        print(f"old title: {file_metadata['oldTitle']}\nnew title: {file_metadata['newTitle']}")
-        print(f"old path: {os.path.join(path, file_metadata['oldTitle'])}")
-        print(f"new path: {os.path.join(path, file_metadata['newTitle'])}")
-
         old_path = os.path.join(path, file_metadata['oldTitle'])
         new_path = os.path.join(path, file_metadata['newTitle'])
         old_path_exists = os.path.exists(old_path)
