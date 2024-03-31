@@ -437,18 +437,28 @@ class GoogleDriveClient:
         file_metadata['oldTitle'] = activity['primaryActionDetail']['rename']['oldTitle']
         file_metadata['newTitle'] = activity['primaryActionDetail']['rename']['newTitle']
 
-        if os.path.exists(os.path.join(path, file_metadata['oldTitle'])) and not os.path.exists(
-                os.path.join(path, file_metadata['newTitle'])):
-            os.rename(os.path.join(path, file_metadata['oldTitle']), os.path.join(path, file_metadata['newTitle']))
+        print(f"old title: {file_metadata['oldTitle']}\nnew title: {file_metadata['newTitle']}")
+        print(f"old path: {os.path.join(path, file_metadata['oldTitle'])}")
+        print(f"new path: {os.path.join(path, file_metadata['newTitle'])}")
 
-            shortened_file_path = "\\".join(os.path.join(path, file_metadata['newTitle']).split("\\")[-4:-1])
+        old_path = os.path.join(path, file_metadata['oldTitle'])
+        new_path = os.path.join(path, file_metadata['newTitle'])
+        old_path_exists = os.path.exists(old_path)
+        new_path_exists = os.path.exists(new_path)
+
+        if old_path_exists == new_path_exists:
+            return
+
+        if old_path_exists and not new_path_exists:
+            os.rename(old_path, new_path)
+
+            shortened_file_path = "\\".join(new_path.split("\\")[-4:-1])
             self.events_manager.update("rename",
                                        f"<html><br><p style='color:{events_colors['rename']}'>"
                                        f"<b>Renamed {file_metadata['oldTitle']}</b> to"
                                        f" <b>{file_metadata['newTitle']}</b> in {shortened_file_path}.</p></html>")
-        elif os.path.exists(os.path.join(path, file_metadata['oldTitle'])) and os.path.exists(
-                os.path.join(path, file_metadata['newTitle'])):
-            shutil.rmtree(os.path.join(path, file_metadata['oldTitle']))
+        elif old_path_exists and new_path_exists:
+            shutil.rmtree(old_path)
 
     def move_event(self, activity, file_metadata):
         """
@@ -493,16 +503,18 @@ class GoogleDriveClient:
         :param path: path to the file.
         :return: None.
         """
-        if os.path.exists(os.path.join(path, file_metadata['name'])):
-            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+        file_path = os.path.join(path, file_metadata['name'])
+
+        if os.path.exists(file_path):
+            shortened_file_path = "\\".join(file_path.split("\\")[-4:-1])
             if file_metadata['mimeType'] == FOLDER_TYPE:
-                shutil.rmtree(os.path.join(path, file_metadata['name']))
+                shutil.rmtree(file_path)
                 self.events_manager.update("delete",
                                            f"<html><br><p style='color:{events_colors['delete']}'>"
                                            f"<b>Deleted</b> {file_metadata['name']}"
                                            f" folder in {shortened_file_path}.</p></html>")
             else:
-                os.remove(os.path.join(path, file_metadata['name']))
+                os.remove(file_path)
                 self.events_manager.update("delete", f"<html><br><p style='color:{events_colors['delete']}'>"
                                                      f"<b>Deleted {file_metadata['name']}</b>"
                                                      f" in {shortened_file_path}.</p></html>")
@@ -514,12 +526,14 @@ class GoogleDriveClient:
         :param path: path to the file.
         :return:
         """
-        if file_metadata['mimeType'] != FOLDER_TYPE and not os.path.exists(os.path.join(path, file_metadata['name'])):
-            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'],
-                                          os.path.join(path, file_metadata['name']))
-        elif file_metadata['mimeType'] == FOLDER_TYPE and not os.path.exists(os.path.join(path, file_metadata['name'])):
-            os.mkdir(os.path.join(path, file_metadata['name']))
-            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+        file_path = os.path.join(path, file_metadata['name'])
+        file_path_exists = os.path.exists(file_path)
+
+        if file_metadata['mimeType'] != FOLDER_TYPE and not file_path_exists:
+            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'], file_path)
+        elif file_metadata['mimeType'] == FOLDER_TYPE and not file_path_exists:
+            os.mkdir(file_path)
+            shortened_file_path = "\\".join(file_path.split("\\")[-4:-1])
             self.events_manager.update("create", f"<html><br><p style='color:{events_colors['create']}'>"
                                                  f"<b>Created {file_metadata['name']}</b>"
                                                  f" folder in {shortened_file_path}.</p></html>")
@@ -531,10 +545,11 @@ class GoogleDriveClient:
         :param path: path to the file.
         :return: None.
         """
+        file_path = os.path.join(path, file_metadata['name'])
+
         if file_metadata['mimeType'] != FOLDER_TYPE:
-            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
-            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'],
-                                          os.path.join(path, file_metadata['name']))
+            shortened_file_path = "\\".join(file_path.split("\\")[-4:-1])
+            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'], file_path)
             self.events_manager.update("update", f"<html><br><p style='color:{events_colors['update']}'>"
                                                  f"<b>Updated {file_metadata['name']}</b>"
                                                  f" in {shortened_file_path}.</p></html>")
@@ -546,16 +561,17 @@ class GoogleDriveClient:
         :param path: path to the file.
         :return: None.
         """
+        file_path = os.path.join(path, file_metadata['name'])
+
         if file_metadata['mimeType'] == FOLDER_TYPE:
-            os.mkdir(os.path.join(path, file_metadata['name']))
-            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+            os.mkdir(file_path)
+            shortened_file_path = "\\".join(file_path.split("\\")[-4:-1])
             self.events_manager.update("restore", f"<html><br><p style='color:{events_colors['restore']}'>"
                                                   f"<b>Restored {file_metadata['name']}</b>"
                                                   f" folder in {shortened_file_path}.</p></html>")
         else:
-            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'],
-                                          os.path.join(path, file_metadata['name']))
-            shortened_file_path = "\\".join(os.path.join(path, file_metadata['name']).split("\\")[-4:-1])
+            self.export_and_download_file(file_metadata['id'], file_metadata['mimeType'], file_path)
+            shortened_file_path = "\\".join(file_path.split("\\")[-4:-1])
             self.events_manager.update("restore", f"<html><br><p style='color:{events_colors['restore']}'>"
                                                   f"<b>Restored {file_metadata['name']}</b>"
                                                   f" in {shortened_file_path}.</p></html>")
